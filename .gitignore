@@ -1,0 +1,9 @@
+/build/
+/dist/
+/payload/
+/out/
+__pycache__/
+*.pyc
+*.sec
+update-config.json
+*.tgz

@@ -1,0 +1,66 @@
+name: OpenBSD build and weekly engine check
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: '23 5 * * 1'
+permissions:
+  contents: read
+concurrency:
+  group: openbsd-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and test in OpenBSD
+        uses: vmactions/openbsd-vm@v1.4.9
+        with:
+          release: '8.0'
+          arch: x86_64
+          envs: 'GITHUB_RUN_NUMBER GITHUB_RUN_ATTEMPT GITHUB_SHA'
+          prepare: |
+            pkg_add cmake ninja qt6-qtwebengine python3
+          run: |
+            sh scripts/build.sh
+      - name: Upload tested native build
+        uses: actions/upload-artifact@v4
+        with:
+          name: discord-openbsd-8.0-amd64
+          path: out/
+          if-no-files-found: error
+      - name: Check release configuration
+        id: release-config
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        env:
+          RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+          UPDATE_READ_TOKEN: ${{ secrets.UPDATE_READ_TOKEN }}
+          UPDATE_PUBLIC_KEY: ${{ secrets.UPDATE_PUBLIC_KEY }}
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: |
+          python3 - <<'PY'
+          import os
+          names = ('RELEASES_TOKEN', 'UPDATE_READ_TOKEN', 'UPDATE_PUBLIC_KEY', 'UPDATE_SIGNING_KEY')
+          missing = [name for name in names if not os.environ.get(name)]
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              print('ready=' + ('false' if missing else 'true'), file=output)
+          if missing:
+              print('::notice::Native build available as an artifact. Private release skipped; configure secrets: ' + ', '.join(missing))
+          PY
+      - name: Install release signer
+        if: steps.release-config.outputs.ready == 'true'
+        run: sudo apt-get update && sudo apt-get install -y signify-openbsd
+      - name: Package, sign, and publish private updates
+        if: steps.release-config.outputs.ready == 'true'
+        env:
+          RELEASE_REPOSITORY: ${{ vars.RELEASE_REPOSITORY || 'softplus10/discord-openbsd-releases' }}
+          UPDATE_KEY_REVISION: ${{ vars.UPDATE_KEY_REVISION || '1' }}
+          RELEASES_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+          UPDATE_READ_TOKEN: ${{ secrets.UPDATE_READ_TOKEN }}
+          UPDATE_PUBLIC_KEY: ${{ secrets.UPDATE_PUBLIC_KEY }}
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: python3 scripts/publish.py
