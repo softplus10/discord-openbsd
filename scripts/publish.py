@@ -46,15 +46,15 @@ def upload(repo, rel, file, token):
 
 
 def main():
-    repo = os.environ["RELEASE_REPOSITORY"]
+    repo = os.environ["GITHUB_REPOSITORY"]
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo):
         raise ValueError("Invalid distribution repository")
-    writer, reader = os.environ["RELEASES_TOKEN"], os.environ["UPDATE_READ_TOKEN"]
+    writer = os.environ["GITHUB_TOKEN"]
     public, private = os.environ["UPDATE_PUBLIC_KEY"], os.environ["UPDATE_SIGNING_KEY"]
-    if not all((writer, reader, public, private)):
+    if not all((writer, public, private)):
         raise ValueError("Release credentials and signing keys must be configured")
-    # Confirm that the read credential can access this repository before embedding it.
-    api(f"/repos/{repo}", reader)
+    if api(f"/repos/{repo}", writer)["private"]:
+        raise ValueError("Make this repository public before publishing token-free updates")
     metadata = json.loads(Path("out/release.json").read_text())
     fingerprint = hashlib.sha256(json.dumps({
         k: metadata[k] for k in ("chromium", "qt", "qt_package", "os_release", "arch", "commit")
@@ -62,7 +62,7 @@ def main():
     channel = f'openbsd-{metadata["os_release"]}-{metadata["arch"]}'
     stable = release(repo, channel, writer)
     if stable and stable.get("body") == fingerprint:
-        print("Browser package, wrapper source, and key revision unchanged; no release needed.")
+        print("Browser package, wrapper source, and signing revision unchanged; no release needed.")
         return
     with tempfile.TemporaryDirectory() as tmp:
         temp = Path(tmp)
@@ -73,7 +73,7 @@ def main():
         for name in ("update.py", "launch.py"):
             shutil.copyfile(Path("scripts") / name, payload / name)
         shutil.copyfile("out/release.json", payload / "release.json")
-        (payload / "update-config.json").write_text(json.dumps({"repository": repo, "token": reader}))
+        (payload / "update-config.json").write_text(json.dumps({"repository": repo}))
         (payload / "update-config.json").chmod(0o600)
         (payload / "update.pub").write_text(public.rstrip() + "\n")
         # Verify the signing pair without disclosing either key to logs/artifacts.
@@ -91,6 +91,7 @@ def main():
             raise ValueError("Immutable release already exists; rerun with a new attempt")
         rel = api(f"/repos/{repo}/releases", writer, "POST", {
             "tag_name": tag, "name": tag, "draft": True,
+            "target_commitish": metadata["commit"], "make_latest": "true",
             "body": "Qt WebEngine package: " + metadata["qt_package"]})
         asset = upload(repo, rel, archive, writer)
         manifest = {**metadata, "sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
@@ -108,7 +109,8 @@ def main():
         api(f'/repos/{repo}/releases/{rel["id"]}', writer, "PATCH", {"draft": False})
         if not stable:
             stable = api(f"/repos/{repo}/releases", writer, "POST", {
-                "tag_name": channel, "name": channel, "body": "", "draft": False})
+                "tag_name": channel, "name": channel, "body": "", "draft": False,
+                "make_latest": "false", "target_commitish": metadata["commit"]})
         # Readers reject a transient mismatched pair and retry on the next launch.
         for file in (manifest_file, signature):
             upload(repo, stable, file, writer)

@@ -59,10 +59,20 @@ class UpdateTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             updater.SafeRedirect().redirect_request(request, None, 302, "", {}, "http://example.com")
 
-    def test_fetch_does_not_send_token_to_arbitrary_hosts(self):
+    def test_fetch_rejects_arbitrary_hosts(self):
         for url in ("https://evil.test/a", "http://api.github.com/a", "https://api.github.com.evil.test/a"):
             with self.assertRaises(ValueError):
-                updater.fetch(url, "never-send-this")
+                updater.fetch(url)
+
+    def test_public_download_has_no_authorization_header(self):
+        response = unittest.mock.MagicMock()
+        response.__enter__.return_value.read.return_value = b'{}'
+        opener = unittest.mock.MagicMock()
+        opener.open.return_value = response
+        with patch.object(updater.urllib.request, "build_opener", return_value=opener):
+            self.assertEqual(updater.fetch("https://api.github.com/repos/owner/repo"), b'{}')
+        request = opener.open.call_args.args[0]
+        self.assertIsNone(request.get_header("Authorization"))
 
     def test_path_traversal_and_extra_files_rejected(self):
         for name in ("../../escape", "/tmp/escape", "unexpected.txt"):
@@ -127,7 +137,7 @@ class UpdateTests(unittest.TestCase):
             current.mkdir(parents=True)
             (root / "current").symlink_to("versions/old")
             (current / "release.json").write_text(json.dumps(self.metadata()))
-            (current / "update-config.json").write_text(json.dumps({"repository": "owner/releases", "token": "test"}))
+            (current / "update-config.json").write_text(json.dumps({"repository": "owner/releases"}))
             release = {"assets": [{"name": name, "url": "https://api.github.com/" + name}
                                   for name in ("manifest.json", "manifest.json.sig")]}
             responses = [json.dumps(release).encode(), b"manifest", b"invalid signature"]

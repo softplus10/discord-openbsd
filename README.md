@@ -44,55 +44,44 @@ wrapper와 `release.json`, 배포 태그는 동일한
 `CHROMIUM-qtQT-rACTION_RUN.ATTEMPT` 버전을 사용합니다. OpenBSD의 정확한 엔진
 패키지 이름(`qt6-qtwebengine-...pN`)도 기록하여 보안 패치 재빌드를 감지합니다.
 
-## 비공개 저장소와 키 설정
+## 공개 Release와 서명키 설정
 
-소스와 배포 파일을 분리합니다. 앱에 포함하는 GitHub 키는 추출 가능하므로,
-**배포 전용 저장소만** 읽을 수 있게 합니다. 배포 파일을 받은 사람은 그 안의
-키를 이용해 이후 배포도 읽을 수 있습니다.
+소스와 배포 파일을 **softplus10/discord-openbsd 한 저장소**에서 관리합니다.
+저장소를 Public으로 설정하면 앱은 인증 키 없이 버전별 GitHub Release에서 업데이트를
+내려받습니다. 별도 배포 저장소, PAT, 앱에 포함할 접근 키는 필요하지 않습니다.
 
-1. `softplus10/discord-openbsd`, `softplus10/discord-openbsd-releases` 두 저장소를
-   **private**으로 만듭니다. 배포 저장소에는 소스나 다른 비밀을 넣지 마십시오.
-2. GitHub fine-grained PAT 두 개를 생성합니다. 둘 다 배포 저장소만 선택합니다.
-   - `RELEASES_TOKEN`: Contents **read and write**. Action에서만 사용합니다.
-   - `UPDATE_READ_TOKEN`: Contents **read-only**. 모든 배포본에 포함됩니다.
-3. OpenBSD에서 `signify -G -n -p update.pub -s update.sec`로 서명키를 만듭니다.
-   `-n`은 CI에서 비밀번호 입력을 요구하지 않도록 합니다. 비밀키는 소스에 커밋하지
-   마십시오. 공개키는 따로 보관하고 최초 설치 시 신뢰할 수 있는 경로로 전달합니다.
-4. **소스 저장소**의 Actions secrets에 다음을 설정합니다.
+1. GitHub의 Settings → General → Danger Zone → Change repository visibility에서
+   저장소를 **Public**으로 바꿉니다.
+2. OpenBSD에서 서명키를 만듭니다. 비밀키는 소스에 커밋하지 마십시오.
+
+   ```sh
+   signify -G -n -p update.pub -s update.sec
+   ```
+
+3. 이 저장소의 Settings → Secrets and variables → Actions에 두 secret을 등록합니다.
 
 | Secret | 값 |
 | --- | --- |
-| `RELEASES_TOKEN` | 배포 저장소 쓰기 전용 PAT |
-| `UPDATE_READ_TOKEN` | 배포 저장소 읽기 전용 PAT |
 | `UPDATE_PUBLIC_KEY` | `update.pub` 전체 내용 |
 | `UPDATE_SIGNING_KEY` | `update.sec` 전체 내용 |
 
-Actions variable `RELEASE_REPOSITORY` 기본값은
-`softplus10/discord-openbsd-releases`입니다. 읽기 키를 교체할 때
-`UPDATE_KEY_REVISION`을 증가시키면 소스/엔진 변경이 없어도 새 배포가 생성됩니다.
-
-GitHub CLI 사용 예시입니다. 먼저 `gh auth status`로 **softplus10** 계정인지 확인합니다.
-저장소 생성과 secret 입력은 인증된 로컬 환경에서 실행합니다.
+`-n`은 CI에서 비밀번호 입력 없이 서명할 수 있게 합니다. 공개키는 따로 보관하고
+최초 설치 시 신뢰할 수 있는 경로로 전달합니다. GitHub CLI 사용 예시는 다음과 같습니다.
 
 ```sh
-gh repo create softplus10/discord-openbsd --private
-gh repo create softplus10/discord-openbsd-releases --private
-gh secret set RELEASES_TOKEN --repo softplus10/discord-openbsd
-gh secret set UPDATE_READ_TOKEN --repo softplus10/discord-openbsd
 gh secret set UPDATE_PUBLIC_KEY --repo softplus10/discord-openbsd < update.pub
 gh secret set UPDATE_SIGNING_KEY --repo softplus10/discord-openbsd < update.sec
-git init -b main
-git add .
-git commit -m 'Add OpenBSD Discord wrapper and signed private updates'
-git remote add origin https://github.com/softplus10/discord-openbsd.git
-git push -u origin main
+gh workflow run build.yml --repo softplus10/discord-openbsd
 ```
 
-**영구 접근 보장:** GitHub PAT는 만료·취소·계정 정책 변경의 영향을 받습니다.
-만료 전에 새 읽기 키를 담은 배포를 내고, 이전 키를 충분히 오래 유효하게 유지해야
-기존 앱이 새 키로 이동할 수 있습니다. 장기간 오프라인이었던 앱의 키가 만료되면
-수동 재설치가 필요합니다. 앱에 키를 넣는 것만으로 무기한 접근을 보장할 수는 없습니다.
-서명키 교체는 자동으로 신뢰하지 않으며 별도의 수동 신뢰 이전이 필요합니다.
+Release 작성은 Actions가 제공하는 `GITHUB_TOKEN`과 `contents: write` 권한을
+사용합니다. 빌드/PR job에는 읽기 권한만 부여하고, main에서 빌드를 통과한 경우에만
+별도의 publish job에 쓰기 권한과 서명키를 제공합니다. 토큰·비밀키는 앱에 포함하지
+않습니다. 앱에는 업데이트 서명을 확인하는 **공개키**만 포함됩니다.
+
+Actions variable `UPDATE_KEY_REVISION`을 증가시키면 소스/엔진 변경이 없어도 다시
+배포합니다. 서명 공개키가 달라지는 교체는 자동으로 신뢰하지 않으며 별도의 수동
+신뢰 이전이 필요합니다. GitHub 공개 배포 파일은 누구나 내려받을 수 있습니다.
 
 ## 주간 Action과 브라우저 업데이트
 
@@ -101,14 +90,14 @@ git push -u origin main
 탐색 정책 C++ 테스트와 Python 업데이트 테스트가 통과한 경우에만 배포합니다.
 엔진 패키지, Qt/Chromium 버전, 소스 commit, 키 revision이 그대로면 배포를 생략합니다.
 빌드 결과는 Actions artifact로 저장됩니다. 배포 secrets가 아직 설정되지 않았으면
-안내 메시지와 함께 비공개 release 생성을 건너뛰며, 빌드/테스트는 계속 수행합니다.
+안내 메시지와 함께 서명된 Release 생성을 건너뛰며, 빌드/테스트는 계속 수행합니다.
 
 OpenBSD가 배포하는 **엔진 패키지**를 확인하는 방식입니다. upstream Chromium의
 신규 버전이 OpenBSD Qt WebEngine에 반영되기 전에는 그 버전으로 전환하지 않습니다.
 Qt WebEngine/Chromium 전체 소스를 매주 컴파일하거나 엔진 공유 라이브러리를 앱에
 묶는 workflow는 아닙니다. 엔진과 의존성은 OpenBSD 패키지 관리자가 관리합니다.
 
-설치한 앱은 실행 시 하루에 한 번 비공개 채널을 백그라운드 확인합니다.
+설치한 앱은 실행 시 하루에 한 번 공개 Release 채널을 백그라운드 확인합니다.
 서명, SHA-256, OS/아키텍처, 증가하는 배포 순번, 엔진 패키지를 검증한 뒤 버전별
 디렉터리에 설치하고 `current` symlink를 원자적으로 교체합니다. 새 wrapper는 다음
 실행부터 적용되며 기존 버전과 로그인 데이터는 보존됩니다.
@@ -120,7 +109,7 @@ Qt WebEngine/Chromium 전체 소스를 매주 컴파일하거나 엔진 공유 �
 
 ## 최초 설치
 
-배포 저장소의 **버전별 release**에서 `discord-openbsd.tgz`, `manifest.json`,
+이 저장소의 [버전별 Release](https://github.com/softplus10/discord-openbsd/releases)에서 `discord-openbsd.tgz`, `manifest.json`,
 `manifest.json.sig`를 내려받습니다. `openbsd-8.0-amd64` release는 최신 채널 포인터이며
 manifest만 제공합니다. 공개키는 배포 파일과 별도로 신뢰한 키를 사용하십시오.
 
@@ -134,8 +123,8 @@ python3 scripts/install.py \
 ~/.local/bin/discord-openbsd
 ```
 
-앱은 `~/.local/share/discord-openbsd`에 설치됩니다. 배포본에 업데이트 읽기 키가
-포함되므로 설치 후 GitHub 로그인은 필요 없습니다. Discord 로그인은 별도입니다.
+앱은 `~/.local/share/discord-openbsd`에 설치됩니다. 업데이트는 공개 Release에서
+인증 없이 받으므로 GitHub 로그인은 필요 없습니다. Discord 로그인은 별도입니다.
 수동 업데이트 확인:
 
 ```sh
@@ -145,7 +134,7 @@ python3 ~/.local/share/discord-openbsd/current/update.py \
 
 ## 검증 상태
 
-이 작업 환경에서 Python 업데이트 테스트 12개와 Python/셸 문법 검사를 통과했습니다.
-Qt6 SDK와 OpenBSD 런타임이 없어 네이티브 GUI 빌드, 탐색 C++ 테스트,
-실제 GitHub Action 실행과 로그인·통화는 아직 검증하지 못했습니다.
-`.github/workflows/build.yml`은 OpenBSD 빌드/테스트를 수행하도록 작성되어 있습니다.
+첫 [OpenBSD Action](https://github.com/softplus10/discord-openbsd/actions/runs/40505546027)에서
+OpenBSD 네이티브 빌드, 탐색 정책 C++ 테스트와 Python 업데이트 테스트가 통과했습니다.
+공개 배포 전환 후 로컬 Python 업데이트 테스트는 13개를 통과했습니다.
+실제 OpenBSD 데스크톱에서 Discord 로그인·MFA·음성/영상 동작은 아직 검증하지 못했습니다.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Private release downloader. Trust is rooted in the installed signify key."""
+"""Public release downloader. Trust is rooted in the installed signify key."""
 import argparse
 import fcntl
 import hashlib
@@ -34,12 +34,11 @@ class SafeRedirect(urllib.request.HTTPRedirectHandler):
         return redirected
 
 
-def fetch(url, token, limit=1024 * 1024, binary=False):
+def fetch(url, limit=1024 * 1024, binary=False):
     parsed = urllib.parse.urlsplit(url)
     if parsed.scheme != "https" or parsed.netloc != "api.github.com" or parsed.username:
-        raise ValueError("Only GitHub API URLs may receive the update credential")
+        raise ValueError("Only HTTPS GitHub API URLs are accepted")
     request = urllib.request.Request(url, headers={
-        "Authorization": "Bearer " + token,
         "Accept": "application/octet-stream" if binary else "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "discord-openbsd-updater"})
     with urllib.request.build_opener(SafeRedirect()).open(request, timeout=30) as response:
@@ -103,7 +102,7 @@ def install(download, manifest, root, public_key):
                 raise ValueError("Archive metadata differs from signed manifest")
         if (stage / "update.pub").read_bytes() != public_key.read_bytes():
             raise ValueError("Signing key rotation requires a separate trust migration")
-        # Keep the existing trusted key; the release carries its next read token.
+        # Keep the existing trusted signing key across updates.
         stage.rename(final)
         link = root / ".current-next"
         link.unlink(missing_ok=True)
@@ -126,12 +125,12 @@ def check(root, force=False):
         return
     channel = "openbsd-" + current["os_release"] + "-" + current["arch"]
     # Each OS/arch has an atomic, signed channel manifest in a stable release.
-    release = json.loads(fetch(f"{API}/repos/{repo}/releases/tags/{channel}", config["token"]))
+    release = json.loads(fetch(f"{API}/repos/{repo}/releases/tags/{channel}"))
     assets = {a["name"]: a["url"] for a in release["assets"]}
     with tempfile.TemporaryDirectory(dir=root) as tmp:
         directory = Path(tmp)
         for name in ("manifest.json", "manifest.json.sig"):
-            (directory / name).write_bytes(fetch(assets[name], config["token"], binary=True))
+            (directory / name).write_bytes(fetch(assets[name], binary=True))
         subprocess.run(["signify", "-V", "-p", str(current_dir / "update.pub"),
                         "-m", str(directory / "manifest.json"),
                         "-x", str(directory / "manifest.json.sig")], check=True,
@@ -150,7 +149,7 @@ def check(root, force=False):
         if type(asset_id) is not int or asset_id <= 0:
             raise ValueError("Invalid asset ID")
         data = fetch(f"{API}/repos/{repo}/releases/assets/{asset_id}",
-                     config["token"], limit=MAX_ARCHIVE, binary=True)
+                     limit=MAX_ARCHIVE, binary=True)
         install(data, manifest, root, current_dir / "update.pub")
     checked.touch()
 
