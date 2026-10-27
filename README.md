@@ -74,6 +74,11 @@ gh secret set UPDATE_SIGNING_KEY --repo softplus10/discord-openbsd < update.sec
 gh workflow run build.yml --repo softplus10/discord-openbsd
 ```
 
+Secret에는 파일명 `update.sec`가 아닌 **파일 내용 전체**를 등록해야 합니다.
+signify 키 파일은 `untrusted comment: ...` 첫 줄과 Base64 키 둘째 줄로 구성됩니다.
+코드는 누락된 주석 줄과 문자로 붙여넣은 `\\n` 줄바꿈을 정규화하고,
+실제 서명·검증으로 키 쌍을 확인한 후에만 Release를 생성합니다.
+
 Release 작성은 Actions가 제공하는 `GITHUB_TOKEN`과 `contents: write` 권한을
 사용합니다. 빌드/PR job에는 읽기 권한만 부여하고, main에서 빌드를 통과한 경우에만
 별도의 publish job에 쓰기 권한과 서명키를 제공합니다. 토큰·비밀키는 앱에 포함하지
@@ -136,5 +141,5 @@ python3 ~/.local/share/discord-openbsd/current/update.py \
 
 첫 [OpenBSD Action](https://github.com/softplus10/discord-openbsd/actions/runs/40505546027)에서
 OpenBSD 네이티브 빌드, 탐색 정책 C++ 테스트와 Python 업데이트 테스트가 통과했습니다.
-공개 배포 전환 후 로컬 Python 업데이트 테스트는 13개를 통과했습니다.
+서명키 형식 검사와 공개 배포 전환 후 로컬 Python 테스트는 21개를 통과했습니다.
 실제 OpenBSD 데스크톱에서 Discord 로그인·MFA·음성/영상 동작은 아직 검증하지 못했습니다.

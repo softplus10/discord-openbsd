@@ -1,4 +1,5 @@
 import hashlib
+import base64
 import importlib.util
 import io
 import json
@@ -13,6 +14,7 @@ import urllib.request
 spec = importlib.util.spec_from_file_location("updater", Path(__file__).parents[1] / "scripts/update.py")
 updater = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(updater)
+PUBLIC_KEY = b"untrusted comment: test key\n" + base64.b64encode(b"Ed" + bytes(40)) + b"\n"
 
 
 class UpdateTests(unittest.TestCase):
@@ -23,7 +25,7 @@ class UpdateTests(unittest.TestCase):
 
     def make_archive(self, contents=None):
         contents = contents or {name: (json.dumps(self.metadata()).encode() if name == "release.json"
-                                      else b"public-key\n" if name == "update.pub" else b"payload")
+                                      else PUBLIC_KEY if name == "update.pub" else b"payload")
                                for name in updater.FILES}
         output = io.BytesIO()
         with tarfile.open(fileobj=output, mode="w:gz") as tar:
@@ -108,7 +110,7 @@ class UpdateTests(unittest.TestCase):
             old.mkdir(parents=True)
             (root / "current").symlink_to("versions/old")
             key = root / "key.pub"
-            key.write_bytes(b"public-key\n")
+            key.write_bytes(PUBLIC_KEY.replace(b"test key", b"different comment"))
             data = self.make_archive()
             manifest = {**self.metadata(), "sha256": hashlib.sha256(data).hexdigest()}
             updater.install(data, manifest, root, key)

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Public release downloader. Trust is rooted in the installed signify key."""
 import argparse
+import base64
 import fcntl
 import hashlib
 import json
@@ -20,6 +21,16 @@ API = "https://api.github.com"
 MAX_ARCHIVE = 100 * 1024 * 1024
 FILES = {"bin/discord-openbsd", "update.py", "launch.py", "release.json",
          "update-config.json", "update.pub"}
+
+
+def public_key_identity(path):
+    lines = [line.strip() for line in path.read_bytes().splitlines() if line.strip()]
+    if len(lines) != 2 or not lines[0].startswith(b"untrusted comment: "):
+        raise ValueError("Invalid signify public key file")
+    data = base64.b64decode(lines[1], validate=True)
+    if len(data) != 42 or data[:2] != b"Ed":
+        raise ValueError("Invalid signify public key")
+    return data
 
 
 class SafeRedirect(urllib.request.HTTPRedirectHandler):
@@ -100,7 +111,7 @@ def install(download, manifest, root, public_key):
         for field in ("version", "sequence", "os", "os_release", "arch", "chromium", "qt", "qt_package"):
             if embedded[field] != manifest[field]:
                 raise ValueError("Archive metadata differs from signed manifest")
-        if (stage / "update.pub").read_bytes() != public_key.read_bytes():
+        if public_key_identity(stage / "update.pub") != public_key_identity(public_key):
             raise ValueError("Signing key rotation requires a separate trust migration")
         # Keep the existing trusted signing key across updates.
         stage.rename(final)

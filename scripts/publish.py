@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Run only on the trusted default branch, after the native OpenBSD tests."""
 import hashlib
+import base64
+import binascii
 import json
 import os
 from pathlib import Path
@@ -12,6 +14,52 @@ import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
+
+
+def normalize_key(value, name):
+    """Accept signify file contents, including common secret-paste variants."""
+    text = value.strip().lstrip("\ufeff").replace("\\r\\n", "\n").replace("\\n", "\n")
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    comment = "untrusted comment: discord-openbsd update key"
+    if lines and lines[0].startswith("untrusted comment: "):
+        comment, lines = lines[0], lines[1:]
+    if len(lines) != 1:
+        raise ValueError(name + ": expected signify key file CONTENTS (not its filename or an SSH key)")
+    try:
+        decoded = base64.b64decode(lines[0], validate=True)
+    except (ValueError, binascii.Error):
+        raise ValueError(name + ": invalid signify key encoding; register the complete file contents") from None
+    size = 104 if name == "UPDATE_SIGNING_KEY" else 42
+    if len(decoded) != size or decoded[:2] != b"Ed":
+        raise ValueError(name + ": expected a signify Ed25519 key; register the complete correct file")
+    if name == "UPDATE_SIGNING_KEY" and int.from_bytes(decoded[4:8], "big") != 0:
+        raise ValueError(name + ": CI requires a key generated with signify -G -n (no passphrase)")
+    return comment + "\n" + lines[0] + "\n"
+
+
+def check_signing_keys(public, private):
+    public = normalize_key(public, "UPDATE_PUBLIC_KEY")
+    private = normalize_key(private, "UPDATE_SIGNING_KEY")
+    signer = shutil.which("signify-openbsd") or shutil.which("signify")
+    if not signer:
+        raise ValueError("Install signify-openbsd or signify before publishing")
+    with tempfile.TemporaryDirectory() as tmp:
+        directory = Path(tmp)
+        pub, sec = directory / "update.pub", directory / "update.sec"
+        message, signature = directory / "probe", directory / "probe.sig"
+        pub.write_text(public)
+        sec.write_text(private)
+        sec.chmod(0o600)
+        message.write_bytes(b"discord-openbsd signing key preflight\n")
+        try:
+            for args in (("-S", "-s", str(sec)), ("-V", "-p", str(pub))):
+                subprocess.run([signer, *args, "-m", str(message), "-x", str(signature)],
+                               check=True, stdin=subprocess.DEVNULL,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            raise ValueError("UPDATE_SIGNING_KEY and UPDATE_PUBLIC_KEY could not sign/verify together; "
+                             "register both complete files from the same signify -G -n invocation") from None
+    return public, private
 
 
 def api(path, token, method="GET", data=None, binary=False):
@@ -53,6 +101,8 @@ def main():
     public, private = os.environ["UPDATE_PUBLIC_KEY"], os.environ["UPDATE_SIGNING_KEY"]
     if not all((writer, public, private)):
         raise ValueError("Release credentials and signing keys must be configured")
+    # Check formatting and the actual key pair before creating any draft/assets.
+    public, private = check_signing_keys(public, private)
     if api(f"/repos/{repo}", writer)["private"]:
         raise ValueError("Make this repository public before publishing token-free updates")
     metadata = json.loads(Path("out/release.json").read_text())
